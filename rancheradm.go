@@ -8,13 +8,16 @@ import (
 	"io/ioutil"
 	"net/http"
 	"os"
+	"time"
 )
 
 var rancherURL, adminUser, adminPassword, adminAccessKey, adminSecretKey, adminToken string
+var waitRetry int
+var debugMode bool
 
 func usage() {
 	fmt.Println(
-`rancheradm - a simple rancher server administration utility. requires rancher 1.2.0
+		`rancheradm - a simple rancher server administration utility. requires rancher 1.2.0
 
 Usage: rancheradm [options] command...
 
@@ -36,12 +39,14 @@ Options:
 
 func main() {
 
-	flag.StringVar(&rancherURL, "url", os.Getenv("RANCHER_URL"), "rancher url (RANCHER_URL)")
-	flag.StringVar(&adminUser, "adminuser", os.Getenv("RANCHER_ADMIN_USER"), "rancher admin user (RANCHER_ADMIN_USER)")
-	flag.StringVar(&adminPassword, "adminpassword", os.Getenv("RANCHER_ADMIN_PASSWORD"), "rancher admin password (RANCHER_ADMIN_PASSWORD)")
-	flag.StringVar(&adminAccessKey, "adminaccesskey", os.Getenv("RANCHER_ADMIN_ACCESS_KEY"), "rancher admin access key (RANCHER_ADMIN_ACCESS_KEY)")
-	flag.StringVar(&adminSecretKey, "adminsecretkey", os.Getenv("RANCHER_ADMIN_SECRET_KEY"), "rancher admin secret key (RANCHER_ADMIN_SECRET_KEY)")
-	flag.StringVar(&adminToken, "admintoken", os.Getenv("RANCHER_ADMIN_TOKEN"), "rancher admin jwt token (RANCHER_ADMIN_TOKEN)")
+	flag.StringVar(&rancherURL, "url", os.Getenv("RANCHER_URL"), "rancher url (env RANCHER_URL)")
+	flag.StringVar(&adminUser, "adminuser", os.Getenv("RANCHER_ADMIN_USER"), "rancher admin user (env RANCHER_ADMIN_USER)")
+	flag.StringVar(&adminPassword, "adminpassword", os.Getenv("RANCHER_ADMIN_PASSWORD"), "rancher admin password (env RANCHER_ADMIN_PASSWORD)")
+	flag.StringVar(&adminAccessKey, "adminaccesskey", os.Getenv("RANCHER_ADMIN_ACCESS_KEY"), "rancher admin access key (env RANCHER_ADMIN_ACCESS_KEY)")
+	flag.StringVar(&adminSecretKey, "adminsecretkey", os.Getenv("RANCHER_ADMIN_SECRET_KEY"), "rancher admin secret key (env RANCHER_ADMIN_SECRET_KEY)")
+	flag.StringVar(&adminToken, "admintoken", os.Getenv("RANCHER_ADMIN_TOKEN"), "rancher admin jwt token (env RANCHER_ADMIN_TOKEN)")
+	flag.IntVar(&waitRetry, "waitretry", 0, "wait/retry until rancher is up (in seconds)")
+	flag.BoolVar(&debugMode, "debug", false, "debug mode")
 
 	flag.Parse()
 
@@ -49,22 +54,24 @@ func main() {
 		panic("need rancher URL")
 	}
 
-	if len(os.Args) == 1 {
+	args := flag.Args()
+
+	if len(args) == 0 {
 		usage()
 		return
 	}
 
-	switch os.Args[1] {
+	switch args[0] {
 	case "token":
 		cmdToken()
 	case "localauth":
-		cmdLocalAuth(os.Args[1:])
+		cmdLocalAuth(args[0:])
 	case "get":
-		cmdGet(os.Args[1:])
+		cmdGet(args[0:])
 	case "set":
-		cmdSet(os.Args[1:])
+		cmdSet(args[0:])
 	case "registration":
-		cmdRegistration(os.Args[1:])
+		cmdRegistration(args[0:])
 	default:
 		usage()
 	}
@@ -72,36 +79,56 @@ func main() {
 
 func apiCall(method, path string, body []byte, auth bool) (respBody []byte, resp *http.Response, err error) {
 
+	if debugMode {
+		fmt.Printf("%s %s\n", method, path)
+	}
+
 	var req *http.Request
 
-	if method == "POST" && len(body) > 0 {
-		req, err = http.NewRequest(method, fmt.Sprintf("%s/v2-beta/%s", rancherURL, path), bytes.NewBuffer(body))
-	} else {
-		req, err = http.NewRequest(method, fmt.Sprintf("%s/v2-beta/%s", rancherURL, path), nil)
-	}
+	until := time.Now().Add(time.Duration(waitRetry) * time.Second)
 
-	if err != nil {
-		panic(err)
-	}
+	for true {
 
-	req.Header.Add("Content-Type", "application/json")
-	req.Header.Add("Accept", "application/json")
-
-	if auth {
-		if len(adminToken) > 0 {
-			req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", adminToken))
-		} else if len(adminAccessKey) > 0 && len(adminSecretKey) > 0 {
-			req.SetBasicAuth(adminAccessKey, adminSecretKey)
-		} else if len(adminUser) > 0 && len(adminPassword) > 0 {
-			getAdminToken()
-			req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", adminToken))
+		if method == "POST" && len(body) > 0 {
+			req, err = http.NewRequest(method, fmt.Sprintf("%s/v2-beta/%s", rancherURL, path), bytes.NewBuffer(body))
 		} else {
-			panic("Need one of: admin user/password, access/secret key, or jwt token")
+			req, err = http.NewRequest(method, fmt.Sprintf("%s/v2-beta/%s", rancherURL, path), nil)
 		}
-	}
 
-	client := &http.Client{}
-	resp, err = client.Do(req)
+		if err != nil {
+			panic(err)
+		}
+
+		req.Header.Add("Content-Type", "application/json")
+		req.Header.Add("Accept", "application/json")
+
+		if auth {
+			if len(adminToken) > 0 {
+				req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", adminToken))
+			} else if len(adminAccessKey) > 0 && len(adminSecretKey) > 0 {
+				req.SetBasicAuth(adminAccessKey, adminSecretKey)
+			} else if len(adminUser) > 0 && len(adminPassword) > 0 {
+				getAdminToken()
+				req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", adminToken))
+			} else {
+				panic("Need one of: admin user/password, access/secret key, or jwt token")
+			}
+		}
+
+		client := &http.Client{}
+
+		resp, err = client.Do(req)
+		if err == nil {
+			break
+		}
+		if time.Now().After(until) {
+			panic("timed out")
+		}
+		if debugMode {
+			fmt.Printf("got %s, retrying\n", err)
+		}
+		time.Sleep(5 * time.Second)
+	}
 
 	if err != nil {
 		panic(err)
@@ -222,7 +249,7 @@ func cmdLocalAuthOn() {
 		panic("could not enable local authentication")
 	}
 
-	fmt.Printf("Local authentication enabled, use %s to login", adminUser)
+	fmt.Printf("Local authentication enabled, use %s to login\n", adminUser)
 }
 
 func cmdLocalAuthOff() {
