@@ -26,11 +26,16 @@ Usage: rancheradm [options] command...
                                    (enabling will use adminuser/adminpassword)
   rancheradm get SETTING        -- get setting
   rancheradm set SETTING VALUE  -- set setting to value
-  rancheradm registration       -- list environments
-  rancheradm registration ENV   -- get registration url for environment ENV
+  rancheradm environments       -- list environments
+  rancheradm registration ENV   -- get registration url for environment ENV (default: Default)
+  rancheradm envapikey ENV      -- create environment api key for ENV (default: Default)
 
 Most commands require authentication by one of admin user/password, admin access/secret key
 or admin jwt token. Those and the RANCHER_URL can be set in the environment.
+  
+To get the registration URL for an enviroment, you need to set the api.host first, for example
+
+  rancheradm set api.host $RANCHER_URL
   
 Options:
 `)
@@ -70,8 +75,12 @@ func main() {
 		cmdGet(args[0:])
 	case "set":
 		cmdSet(args[0:])
+	case "environments":
+		cmdEnvironments()
 	case "registration":
 		cmdRegistration(args[0:])
+	case "envapikey":
+		cmdEnvApiKey(args[0:])
 	default:
 		usage()
 	}
@@ -236,6 +245,32 @@ func getSettings() []interface{} {
 
 }
 
+func getEnvironment(name string, list bool) (id string, err error) {
+	body, _, err := apiCall("GET", "/projects", nil)
+
+	if err != nil {
+		panic(err)
+	}
+
+	var f map[string]interface{}
+	err = json.Unmarshal(body, &f)
+
+	if projects, ok := f["data"].([]interface{}); ok {
+		for _, pMap := range projects {
+			if project, ok := pMap.(map[string]interface{}); ok {
+				if list {
+					fmt.Println(project["name"])
+				} else if project["name"] == name {
+					id, _ = project["id"].(string)
+				}
+			}
+		}
+	}
+
+	return
+
+}
+
 func cmdToken() {
 	fmt.Println(getAdminToken())
 }
@@ -379,48 +414,33 @@ func cmdSet(args []string) {
 	}
 }
 
+func cmdEnvironments() {
+	getEnvironment("", true)
+}
+
 func cmdRegistration(args []string) {
-	body, _, err := apiCall("GET", "/projects", nil)
+
+	var environmentName string
+
+	if len(args) == 1 {
+		environmentName = "Default"
+	} else {
+		environmentName = args[1]
+	}
+
+	id, err := getEnvironment(environmentName, false)
+
+	if len(id) < 1 {
+		panic(fmt.Sprintf("environment %s not found", environmentName))
+	}
+
+	body, _, err := apiCall("GET", "/projects/"+id+"/registrationtokens", nil)
 
 	if err != nil {
 		panic(err)
 	}
 
 	var f map[string]interface{}
-	err = json.Unmarshal(body, &f)
-
-	if err != nil {
-		panic(err)
-	}
-
-	var id string
-
-	if projects, ok := f["data"].([]interface{}); ok {
-		for _, pMap := range projects {
-			if project, ok := pMap.(map[string]interface{}); ok {
-				if len(args) == 1 {
-					fmt.Println(project["name"])
-				} else if args[1] == project["name"] {
-					id, _ = project["id"].(string)
-				}
-			}
-		}
-	}
-
-	if len(args) == 1 {
-		return
-	}
-
-	if len(id) < 1 {
-		panic(fmt.Sprintf("project %s not found", args[1]))
-	}
-
-	body, _, err = apiCall("GET", "/projects/"+id+"/registrationtokens", nil)
-
-	if err != nil {
-		panic(err)
-	}
-
 	err = json.Unmarshal(body, &f)
 
 	if err != nil {
@@ -470,9 +490,60 @@ func cmdRegistration(args []string) {
 		if err != nil {
 			panic(err)
 		}
-		fmt.Println(f["registrationUrl"])
+
+		registationUrl := f["registrationUrl"]
+		if registationUrl == nil {
+			fmt.Println("registration url is nil. did you set api.host?")
+		} else {
+			fmt.Println(registationUrl)
+		}
 
 	} else {
-		panic("could not parse registration tokens for project")
+		panic("could not parse registration tokens for environment")
 	}
+
+}
+
+func cmdEnvApiKey(args []string) {
+
+	var environmentName string
+
+	if len(args) == 1 {
+		environmentName = "Default"
+	} else {
+		environmentName = args[1]
+	}
+
+	id, err := getEnvironment(environmentName, false)
+
+	if err != nil {
+		panic(err)
+	}
+
+	if len(id) < 1 {
+		panic(fmt.Sprintf("environment %s not found", args[1]))
+	}
+
+	reqData := map[string]interface{}{
+		"description": environmentName,
+		"name":        environmentName,
+		"accountId":   id,
+	}
+
+	reqJson, err := json.Marshal(reqData)
+
+	if err != nil {
+		panic(err)
+	}
+
+	body, _, err := apiCall("POST", "/apiKeys", reqJson)
+
+	var f map[string]interface{}
+	err = json.Unmarshal(body, &f)
+
+	if err != nil {
+		panic(err)
+	}
+
+	fmt.Printf("%s %s\n", f["publicValue"], f["secretValue"])
 }
