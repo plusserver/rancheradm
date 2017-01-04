@@ -29,7 +29,8 @@ Usage: rancheradm [options] command...
   rancheradm environments       -- list environments
   rancheradm registration ENV   -- get registration url for environment ENV (default: Default)
   rancheradm envapikey ENV      -- create environment api key for ENV (default: Default)
-
+  rancheradm apikey             -- create admin api key
+  
 Most commands require authentication by one of admin user/password, admin access/secret key
 or admin jwt token. Those and the RANCHER_URL can be set in the environment.
   
@@ -81,6 +82,8 @@ func main() {
 		cmdRegistration(args[0:])
 	case "envapikey":
 		cmdEnvApiKey(args[0:])
+	case "apikey":
+		cmdApiKey()
 	default:
 		usage()
 	}
@@ -528,6 +531,32 @@ func cmdEnvApiKey(args []string) {
 		"description": environmentName,
 		"name":        environmentName,
 		"accountId":   id,
+	}
+
+	reqJson, err := json.Marshal(reqData)
+
+	if err != nil {
+		panic(err)
+	}
+
+	body, _, err := apiCall("POST", "/apiKeys", reqJson)
+
+	var f map[string]interface{}
+	err = json.Unmarshal(body, &f)
+
+	if err != nil {
+		panic(err)
+	}
+
+	fmt.Printf("%s %s\n", f["publicValue"], f["secretValue"])
+}
+
+func cmdApiKey() {
+
+	reqData := map[string]interface{}{
+		"description": adminUser,
+		"name":        adminPassword,
+		"accountId":   "1a1", // is this a risk?
 	}
 
 	reqJson, err := json.Marshal(reqData)

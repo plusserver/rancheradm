@@ -14,6 +14,7 @@ Usage: rancheradm [options] command...
   rancheradm environments       -- list environments
   rancheradm registration ENV   -- get registration url for environment ENV (default: Default)
   rancheradm envapikey ENV      -- create environment api key for ENV (default: Default)
+  rancheradm apikey ENV         -- create admin api key
 ```
 
 Most commands require authentication by one of admin user/password, admin access/secret key
