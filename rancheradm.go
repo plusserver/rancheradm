@@ -91,9 +91,9 @@ func main() {
 
 func mkRequest(method, path string, body []byte) (req *http.Request, err error) {
 	if method == "POST" && len(body) > 0 {
-		req, err = http.NewRequest(method, fmt.Sprintf("%s/v2-beta/%s", rancherURL, path), bytes.NewBuffer(body))
+		req, err = http.NewRequest(method, fmt.Sprintf("%s/v2-beta%s", rancherURL, path), bytes.NewBuffer(body))
 	} else {
-		req, err = http.NewRequest(method, fmt.Sprintf("%s/v2-beta/%s", rancherURL, path), nil)
+		req, err = http.NewRequest(method, fmt.Sprintf("%s/v2-beta%s", rancherURL, path), nil)
 	}
 	req.Header.Add("Content-Type", "application/json")
 	req.Header.Add("Accept", "application/json")
@@ -101,7 +101,7 @@ func mkRequest(method, path string, body []byte) (req *http.Request, err error) 
 	return
 }
 
-func apiCall(method, path string, body []byte) (respBody []byte, resp *http.Response, err error) {
+func apiCall(method, path string, body []byte, noauth bool) (respBody []byte, resp *http.Response, err error) {
 
 	if debugMode {
 		fmt.Printf("%s %s\n", method, path)
@@ -130,7 +130,7 @@ func apiCall(method, path string, body []byte) (respBody []byte, resp *http.Resp
 		// Try without authorization first (for example, when checking for localauth status)
 		resp, err = client.Do(req)
 
-		if err == nil && resp.StatusCode == http.StatusUnauthorized {
+		if err == nil && resp.StatusCode == http.StatusUnauthorized && !noauth {
 
 			req, err = mkRequest(method, path, body)
 
@@ -144,16 +144,27 @@ func apiCall(method, path string, body []byte) (respBody []byte, resp *http.Resp
 
 			// Retry with auth
 			if len(adminToken) > 0 {
+				if debugMode {
+					fmt.Printf("Set Authorization: Bearer %s\n", adminToken)
+				}
 				req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", adminToken))
 			} else if len(adminAccessKey) > 0 && len(adminSecretKey) > 0 {
 				req.SetBasicAuth(adminAccessKey, adminSecretKey)
 			} else if len(adminUser) > 0 && len(adminPassword) > 0 {
 				getAdminToken()
+				if debugMode {
+					fmt.Printf("Set Authorization: Bearer %s\n", adminToken)
+				}
 				req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", adminToken))
 			} else {
 				panic("authentication required, but none of: admin user/password, access/secret key, or jwt token was set")
 			}
+
 			resp, err = client.Do(req)
+
+			if err == nil && resp.StatusCode == http.StatusUnauthorized {
+				panic("authentication failed")
+			}
 
 			if err != nil {
 				panic(err)
@@ -197,7 +208,7 @@ func getAdminToken() string {
 	}
 
 	reqData := map[string]string{
-		"code":         "admin:admin",
+		"code":         adminUser + ":" + adminPassword,
 		"authProvider": "localauthconfig",
 	}
 
@@ -207,8 +218,11 @@ func getAdminToken() string {
 		panic(err)
 	}
 
-	body, _, err := apiCall("POST", "/token", reqJson)
+	body, resp, err := apiCall("POST", "/token", reqJson, true)
 
+	if err == nil && resp.StatusCode == http.StatusUnauthorized {
+		panic("authentication failed")
+	}
 	if err != nil {
 		panic(err)
 	}
@@ -231,7 +245,7 @@ func getAdminToken() string {
 }
 
 func getSettings() []interface{} {
-	body, _, err := apiCall("GET", "/settings", nil)
+	body, _, err := apiCall("GET", "/settings", nil, false)
 
 	if err != nil {
 		panic(err)
@@ -249,7 +263,7 @@ func getSettings() []interface{} {
 }
 
 func getEnvironment(name string, list bool) (id string, err error) {
-	body, _, err := apiCall("GET", "/projects", nil)
+	body, _, err := apiCall("GET", "/projects", nil, false)
 
 	if err != nil {
 		panic(err)
@@ -314,7 +328,7 @@ func cmdLocalAuthOn() {
 		panic(err)
 	}
 
-	_, resp, err := apiCall("POST", "/localauthconfig", reqJson)
+	_, resp, err := apiCall("POST", "/localauthconfig", reqJson, true)
 
 	if err != nil {
 		panic(err)
@@ -343,7 +357,7 @@ func cmdLocalAuthOff() {
 		panic(err)
 	}
 
-	body, resp, err := apiCall("POST", "/localauthconfig", reqJson)
+	body, resp, err := apiCall("POST", "/localauthconfig", reqJson, false)
 
 	if err != nil {
 		panic(err)
@@ -358,7 +372,7 @@ func cmdLocalAuthOff() {
 }
 
 func cmdLocalAuthCheck() {
-	body, _, err := apiCall("GET", "/localauthconfig", nil)
+	body, _, err := apiCall("GET", "/localauthconfig", nil, false)
 
 	var f map[string]interface{}
 	err = json.Unmarshal(body, &f)
@@ -406,7 +420,7 @@ func cmdSet(args []string) {
 		panic(err)
 	}
 
-	body, resp, err := apiCall("POST", "/settings", reqJson)
+	body, resp, err := apiCall("POST", "/settings", reqJson, false)
 
 	if err != nil {
 		panic(err)
@@ -437,7 +451,7 @@ func cmdRegistration(args []string) {
 		panic(fmt.Sprintf("environment %s not found", environmentName))
 	}
 
-	body, _, err := apiCall("GET", "/projects/"+id+"/registrationtokens", nil)
+	body, _, err := apiCall("GET", "/projects/"+id+"/registrationtokens", nil, false)
 
 	if err != nil {
 		panic(err)
@@ -468,6 +482,7 @@ func cmdRegistration(args []string) {
 			"POST",
 			"/projects/"+id+"/registrationtokens",
 			[]byte(`{"type":"registrationToken"}`),
+			false,
 		)
 
 		if err != nil {
@@ -482,7 +497,7 @@ func cmdRegistration(args []string) {
 
 		regId := f["id"].(string)
 
-		body, _, err := apiCall("GET", "/projects/"+id+"/registrationtokens/"+regId, nil)
+		body, _, err := apiCall("GET", "/projects/"+id+"/registrationtokens/"+regId, nil, false)
 
 		if err != nil {
 			panic(err)
@@ -539,7 +554,7 @@ func cmdEnvApiKey(args []string) {
 		panic(err)
 	}
 
-	body, _, err := apiCall("POST", "/apiKeys", reqJson)
+	body, _, err := apiCall("POST", "/apiKeys", reqJson, false)
 
 	var f map[string]interface{}
 	err = json.Unmarshal(body, &f)
@@ -565,7 +580,7 @@ func cmdApiKey() {
 		panic(err)
 	}
 
-	body, _, err := apiCall("POST", "/apiKeys", reqJson)
+	body, _, err := apiCall("POST", "/apiKeys", reqJson, false)
 
 	var f map[string]interface{}
 	err = json.Unmarshal(body, &f)
