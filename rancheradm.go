@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-var rancherURL, adminUser, adminPassword, adminAccessKey, adminSecretKey, adminToken string
+var rancherURL, adminUser, adminPassword, adminAccessKey, adminSecretKey, adminToken, outputFormat string
 var waitRetry int
 var debugMode bool
 
@@ -53,6 +53,7 @@ func main() {
 	flag.StringVar(&adminToken, "admintoken", os.Getenv("RANCHER_ADMIN_TOKEN"), "rancher admin jwt token (env RANCHER_ADMIN_TOKEN)")
 	flag.IntVar(&waitRetry, "waitretry", 0, "wait/retry until rancher is up (in seconds)")
 	flag.BoolVar(&debugMode, "debug", false, "debug mode")
+	flag.StringVar(&outputFormat, "format", "plain", "output format (plain, json)")
 
 	flag.Parse()
 
@@ -288,6 +289,19 @@ func getEnvironment(name string, list bool) (id string, err error) {
 
 }
 
+func formatOutput(data interface{}) {
+	if outputFormat == "json" {
+		json, err := json.Marshal(data)
+		if err != nil {
+			panic(err)
+		}
+		fmt.Println(string(json))
+	} else {
+		fmt.Println(data)
+	}
+}
+
+
 func cmdToken() {
 	fmt.Println(getAdminToken())
 }
@@ -338,7 +352,7 @@ func cmdLocalAuthOn() {
 		panic("could not enable local authentication")
 	}
 
-	fmt.Printf("Local authentication enabled, use %s to login\n", adminUser)
+	formatOutput(fmt.Sprintf("Local authentication enabled, use %s to login\n", adminUser))
 }
 
 func cmdLocalAuthOff() {
@@ -367,7 +381,7 @@ func cmdLocalAuthOff() {
 		panic(fmt.Sprintf("could not disable local authentication: %s", body))
 	}
 
-	fmt.Println("Local authentication disabled")
+	formatOutput("Local authentication disabled")
 
 }
 
@@ -384,7 +398,7 @@ func cmdLocalAuthCheck() {
 	if dataArray, ok := f["data"].([]interface{}); ok {
 		if data, ok := dataArray[0].(map[string]interface{}); ok {
 			if authEnabled, ok := data["enabled"].(bool); ok {
-				fmt.Println(authEnabled)
+				formatOutput(authEnabled)
 			}
 		}
 	}
@@ -396,9 +410,13 @@ func cmdGet(args []string) {
 	for _, sMap := range settings {
 		if setting, ok := sMap.(map[string]interface{}); ok {
 			if len(args) == 1 {
-				fmt.Printf("%s=%s\n", setting["name"], setting["value"])
+				if outputFormat == "plain" {
+					fmt.Printf("%s=%s\n", setting["name"], setting["value"])
+				} else {
+					formatOutput(map[string]string{"name":setting["name"].(string),"value":setting["value"].(string)})
+				}
 			} else if len(args) == 2 && setting["name"] == args[1] {
-				fmt.Println(setting["value"])
+				formatOutput(setting["value"].(string))
 			}
 		}
 	}
